@@ -1,14 +1,10 @@
-from model import (LSTM, B_LSTM)
+from model import (LSTM, GRU, B_LSTM, BiLSTM)
 import numpy as np
 import torch
 from torch import nn, optim
 from torch.utils.data import (Dataset, DataLoader, TensorDataset)
 
-
-# K - fold validation, then saves K checkpoints at desired path.
-# Path should exist before running. TODO : if path does not exist, create one.
-
-def train_model(num_epochs,X,y,path,bayesian=False):
+def train_model(num_epochs,X,y,path,model_name = 'LSTM'):
 
     n_f = X.shape[2]
     seq_length = X.shape[1]
@@ -18,13 +14,17 @@ def train_model(num_epochs,X,y,path,bayesian=False):
     y_split = torch.split(y,y.shape[0]//10 + 1)
     train_hist = np.zeros((num_epochs,(len(X_split))))
     test_hist = np.zeros((num_epochs,(len(X_split))))
-    for i in range(len(X_split)) : # k fold for time series
-        if bayesian == False :
+    for i in range(len(X_split)) :
+        if model_name == 'LSTM' :
             model = LSTM(n_features=n_f, n_hidden=128, seq_len=seq_length, y_length=y_len)
-        else :
+        elif model_name == 'GRU' :
+            model = GRU(n_features=n_f, n_hidden=128, seq_len=seq_length, y_length=y_len)
+        elif model_name == 'B_LSTM' :
             model = B_LSTM(n_features=n_f, n_hidden=128, seq_len=seq_length, y_length=y_len)
+        elif model_name == 'BiLSTM' :
+            model = BiLSTM(n_features=n_f, n_hidden=128, seq_len=seq_length, y_length=y_len)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        loss_fn = torch.nn.MSELoss()
+        loss_fn = torch.nn.MSELoss() ######## TODO : apply custom loss #########
         model = model.to('cuda')
         X_test = X_split[i].to('cuda')
         y_test = y_split[i].to('cuda')
@@ -43,7 +43,7 @@ def train_model(num_epochs,X,y,path,bayesian=False):
                 loss = torch.sqrt(loss_fn(y_pred.float(), y_train))
                 with torch.no_grad():
                     y_test_pred = model(X_test)
-                    test_loss = torch.sqrt(loss_fn(y_test_pred.float(), y_test))
+                    test_loss = torch.sqrt(loss_fn(y_test_pred.float(), y_test)) ######## TODO : apply custom loss #########
                 test_hist[t,i] += test_loss.item()
                 train_hist[t,i] += loss.item()
                 optimizer.zero_grad()
@@ -57,6 +57,7 @@ def train_model(num_epochs,X,y,path,bayesian=False):
                 'epoch': num_epochs,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'loss': loss
+                'loss': loss,
+                'test_loss':test_hist[num_epochs-1,i]
             }, f"model/{path}/ckpt_{i+1}.pt")
     print('Training Done.')
