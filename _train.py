@@ -2,14 +2,16 @@ from model import LSTM, GRU, B_LSTM, BiLSTM
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, TensorDataset
+import os
 
 
-def train_model(num_epochs, X, y, path, model_name="LSTM"):
+def train_model(num_epochs, X, y, path, loss_function, model_name="LSTM"):
 
     n_f = X.shape[2]
     seq_length = X.shape[1]
     y_len = y.shape[1]
-
+    if not os.path.exists(f"model/{path}") :
+        os.makedirs(f"model/{path}")
     X_split = torch.split(X, X.shape[0] // 10 + 1)
     y_split = torch.split(y, y.shape[0] // 10 + 1)
     train_hist = np.zeros((num_epochs, (len(X_split))))
@@ -24,7 +26,7 @@ def train_model(num_epochs, X, y, path, model_name="LSTM"):
         elif model_name == "BiLSTM":
             model = BiLSTM(n_features=n_f, n_hidden=128, seq_len=seq_length, y_length=y_len)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        loss_fn = torch.nn.MSELoss()  # TODO : apply custom loss #########
+        loss_fn = loss_function  # TODO : apply custom loss #########
         model = model.to("cuda")
         X_test = X_split[i].to("cuda")
         y_test = y_split[i].to("cuda")
@@ -59,6 +61,7 @@ def train_model(num_epochs, X, y, path, model_name="LSTM"):
                 )
             )
         print("saving checkpoint at fold", i + 1)
+
         torch.save(
             {
                 "epoch": num_epochs,
