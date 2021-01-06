@@ -1,87 +1,191 @@
-from model import LSTM, GRU, B_LSTM, BiLSTM
+from _model import LSTM, GRU, B_LSTM, B_GRU, BiLSTM
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, TensorDataset
+from torch import nn, optim
+from torch.utils.data import Dataset, DataLoader, TensorDataset
 import os
+import sys
+import json
+from _loss import CustomLoss
 
 
-class Trainer(object) :
+def train_model(X, y, num_epochs, loss_func, model_name, config_dir, checkpoint_dir):
 
-    def __init__(self, foldk, num_epochs, X, y) :
+    if not os.path.exists(f"model/{checkpoint_dir}"):
+        os.makedirs(f"model/{checkpoint_dir}")
 
-        super(Trainer,self).__init__()
+    with open(config_dir, "r") as conf:
+        config = json.load(conf)
 
-        self.foldk = foldk
-        self.num_epochs = num_epochs
-        self.X = X
-        self.y = y
+    train_hist = np.zeros(num_epochs)
+    n_f = X.shape[2]
+    seq_length = X.shape[1]
+    y_len = y.shape[1]
 
-        self.n_f = X.shape[2]
-        self.seq_length = X.shape[1]
-        self.y_len = y.shape[1]
+    numbers = (n_f, seq_length, y_len)
 
-    def train_model(self, path, loss_function, model_name="LSTM"):
+    ### choose model ###
+    if model_name == "LSTM":
+        model = LSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "GRU":
+        model = GRU(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "B_LSTM":
+        model = B_LSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "BiLSTM":
+        model = BiLSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "B_GRU":
+        model = B_GRU(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    else:
+        print("Input valid model name.")
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
 
-        if not os.path.exists(f"model/{path}") :
-            os.makedirs(f"model/{path}")
-        X_split = torch.split(self.X, self.X.shape[0] // self.foldk + 1)
-        y_split = torch.split(self.y, self.y.shape[0] // self.foldk + 1)
-        train_hist = np.zeros((self.num_epochs, (len(X_split))))
-        test_hist = np.zeros((self.num_epochs, (len(X_split))))
-        for i in range(len(X_split)):
-            if model_name == "LSTM":
-                model = LSTM(n_features=self.n_f, n_hidden=128, seq_len=self.seq_length, y_length=self.y_len)
-            elif model_name == "GRU":
-                model = GRU(n_features=self.n_f, n_hidden=128, seq_len=self.seq_length, y_length=self.y_len)
-            elif model_name == "B_LSTM":
-                model = B_LSTM(n_features=self.n_f, n_hidden=128, seq_len=self.seq_length, y_length=self.y_len)
-            elif model_name == "BiLSTM":
-                model = BiLSTM(n_features=self.n_f, n_hidden=128, seq_len=self.seq_length, y_length=self.y_len)
-            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-            loss_fn = loss_function
-            model = model.to("cuda")
-            X_test = X_split[i].to("cuda")
-            y_test = y_split[i].to("cuda")
-            idx = [k for k in range(len(X_split) - 1) if k != i]
-            X_train = torch.cat([X_split[x] for x in idx])
-            y_train = torch.cat([y_split[x] for x in idx])
-            dataset = TensorDataset(X_train, y_train)
-            dataloader = DataLoader(dataset, batch_size=64, shuffle=True, drop_last=False)
-            print(str(i + 1) + "th fold training start")
-            for t in range(self.num_epochs):  # epochs per fold
-                for batch_idx, samples in enumerate(dataloader):
-                    X_train, y_train = samples
-                    X_train = X_train.to("cuda")
-                    y_train = y_train.to("cuda")
-                    y_pred = model(X_train)
-                    loss = torch.sqrt(loss_fn(y_pred.float(), y_train))
-                    with torch.no_grad():
-                        y_test_pred = model(X_test)
-                        test_loss = torch.sqrt(
-                            loss_fn(y_test_pred.float(), y_test)
-                        )  
-                    test_hist[t, i] += test_loss.item()
-                    train_hist[t, i] += loss.item()
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                train_hist[t, i] /= len(dataloader)
-                test_hist[t, i] /= len(dataloader)
-                print(
-                    "Epoch {:3d} train loss: {:.4f} test loss: {:.4f}".format(
-                        t + 1, train_hist[t, i], test_hist[t, i]
-                    )
-                )
-            print("saving checkpoint at fold", i + 1)
+    ### multiGPUsupport ###
+    if torch.cuda.device_count() > 1:
+        model = nn.DataParallel(model)
+    loss_fn = loss_func
 
-            torch.save(
-                {
-                    "epoch": num_epochs,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": loss,
-                    "test_loss": test_hist[num_epochs - 1, i],
-                },
-                f"model/{path}/ckpt_{i+1}.pt",
-            )
-        print("Training Done.")
+    ### train on cuda ###
+    model = model.to("cuda")
+
+    dataset = TensorDataset(X, y)
+    dataloader = DataLoader(
+        dataset, batch_size=config["batch_size"], shuffle=True, drop_last=False
+    )
+
+    ### train loop ###
+    for t in range(num_epochs):
+        for _, samples in enumerate(dataloader):
+            X_train, y_train = samples
+            X_train = X_train.to("cuda")
+            y_train = y_train.to("cuda")
+            y_pred = model(X_train)
+            loss = torch.sqrt(loss_fn(y_pred.float(), y_train))
+            train_hist[t] += loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        train_hist[t] /= len(dataloader)
+        print("Epoch {:3d} train loss: {:.4f}".format(t + 1, train_hist[t]))
+
+    ### saving checkpoint ###
+    ckpt = {
+        "model_state_dict": model.module.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "numbers": numbers,
+        "model_name": model_name,
+    }
+    torch.save(ckpt, f"model/{checkpoint_dir}/checkpoint.pt")
+    print("Training Done.")
+
+
+def keep_training(X, y, num_epochs, loss_func, config_dir, checkpoint_dir):
+
+    with open(config_dir, "r") as conf:
+        config = json.load(conf)
+
+    ckpt = torch.load(checkpoint_dir, map_location="cuda:0")
+
+    model_name = ckpt["model_name"]
+    n_f = ckpt["numbers"][0]
+    seq_length = ckpt["numbers"][1]
+    y_len = ckpt["numbers"][2]
+
+    if model_name == "LSTM":
+        model = LSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "GRU":
+        model = GRU(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "B_LSTM":
+        model = B_LSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "BiLSTM":
+        model = BiLSTM(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+    elif model_name == "B_GRU":
+        model = B_GRU(
+            n_features=n_f,
+            n_hidden=config["n_hidden"],
+            seq_len=seq_length,
+            y_length=y_len,
+        )
+
+    model.load_state_dict(ckpt["model_state_dict"])
+    model = model.to("cuda")
+    optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
+    optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+
+    loss_fn = loss_func
+    train_hist = np.zeros(num_epochs)
+
+    dataset = TensorDataset(X, y)
+    dataloader = DataLoader(
+        dataset, batch_size=config["batch_size"], shuffle=True, drop_last=False
+    )
+
+    ### train loop ###
+    for t in range(num_epochs):
+        for _, samples in enumerate(dataloader):
+            X_train, y_train = samples
+            X_train = X_train.to("cuda")
+            y_train = y_train.to("cuda")
+            y_pred = model(X_train)
+            loss = torch.sqrt(loss_fn(y_pred.float(), y_train))
+            train_hist[t] += loss.item()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+        train_hist[t] /= len(dataloader)
+        print("Epoch {:3d} train loss: {:.4f}".format(t + 1, train_hist[t]))
+
+    ### saving checkpoint ###
+    ckpt = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "loss": loss,
+        "numbers": ckpt["numbers"],
+        "model_name": model_name,
+    }
+    torch.save(ckpt, checkpoint_dir)

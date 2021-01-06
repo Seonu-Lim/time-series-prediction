@@ -1,38 +1,76 @@
 import torch
+import numpy as np
+import pandas as pd
+from _model import LSTM, GRU, B_LSTM, BiLSTM, B_GRU
+import json
 
 
 class Prediction(object):
-    def __init__(self, X, param_dict, n_f, seq_length, y_len):
+    def __init__(self, config_dir, checkpoint_dir):
 
-        self.X = X
-        self.param_dict = param_dict
-        self.n_f = n_f
-        self.seq_length = seq_length
-        self.y_len = y_len
-        self.names = list(param_dict.keys())
+        with open(config_dir, "r") as conf:
+            config = json.load(conf)
 
-    def get_forecast(self):
+        ckpt = torch.load(checkpoint_dir)
+
+        n_f = ckpt["numbers"][0]
+        seq_length = ckpt["numbers"][1]
+        y_len = ckpt["numbers"][2]
+
+        if ckpt["model_name"] == "LSTM":
+            model = LSTM(
+                n_features=n_f,
+                n_hidden=config["n_hidden"],
+                seq_len=seq_length,
+                y_length=y_len,
+            )
+        elif ckpt["model_name"] == "GRU":
+            model = GRU(
+                n_features=n_f,
+                n_hidden=config["n_hidden"],
+                seq_len=seq_length,
+                y_length=y_len,
+            )
+        elif ckpt["model_name"] == "B_LSTM":
+            model = B_LSTM(
+                n_features=n_f,
+                n_hidden=config["n_hidden"],
+                seq_len=seq_length,
+                y_length=y_len,
+            )
+        elif ckpt["model_name"] == "BiLSTM":
+            model = BiLSTM(
+                n_features=n_f,
+                n_hidden=config["n_hidden"],
+                seq_len=seq_length,
+                y_length=y_len,
+            )
+        elif ckpt["model_name"] == "B_GRU":
+            model = B_GRU(
+                n_features=n_f,
+                n_hidden=config["n_hidden"],
+                seq_len=seq_length,
+                y_length=y_len,
+            )
+
+        model.load_state_dict(ckpt["model_state_dict"])
+        self.model = model.to("cuda")
+
+    def get_forecast(self, X):
+
         with torch.no_grad():
-            testdata = self.X[-1:]
-            forecast = []
-            for j in range(len(self.names)):
-                y_t_p = self.param_dict[self.names[j]](testdata).cpu().numpy()
-                forecast.append(y_t_p)
-        forecast = [sum(x) / len(x) for x in zip(*forecast)]
-        forecast = forecast[0].tolist()
-        return forecast
+            test_data = X[-1:]
+            forecast = self.model(test_data).cpu().numpy()
+        return forecast[0]
 
-    def get_prediction(self, days):
+    def get_prediction(self, X, days):
+
         j = days - 1
         with torch.no_grad():
-            allpreds = []
-            for j in range(len(self.names)):
-                preds = []
-                for i in range(len(self.X)):
-                    testdata = self.X[i : i + 1]
-                    y_test_pred = self.param_dict[self.names[j]](testdata)
-                    pred = y_test_pred[:, j].cpu().numpy()
-                    preds.append(pred[0])
-                allpreds.append(preds)
-        preds = [sum(x) / len(x) for x in zip(*allpreds)]
+            preds = []
+            for i in range(len(X)):
+                test_data = X[i : i + 1]
+                y_test_pred = self.model(test_data)
+                pred = y_test_pred[:, j].cpu().numpy()
+                preds.append(pred[0])
         return preds
